@@ -1,20 +1,5 @@
 import sqlite3
 
-# conn = sqlite3.connect("./foods.sql")
-# conn.execute("CREATE TABLE IF NOT EXISTS foods (vitamin VARCHAR(300), product VARCHAR(300));")
-#
-#
-# def add_vitamin(vit_name, product_list):
-#     sp = product_list.split(',')
-#     normalized = []
-#     for p in sp:
-#         normalized.append(p.strip().lower())
-#     script = []
-#     for p in normalized:
-#         script.append("INSERT INTO foods (vitamin, product) VALUES (\"" + vit_name + "\",\"" + p + "\")")
-#     conn.executescript(";".join(script))
-
-
 def find_minimal():
     conn = sqlite3.connect("./foods.sql")
     cur = conn.execute("SELECT DISTINCT vitamin FROM foods")
@@ -66,26 +51,6 @@ def find_minimal():
                 has_dangling = True
     conn.close()
     return minimal_arr
-
-
-# def find_efficient(exclude_set, limit=3):
-#     cur = conn.execute("SELECT DISTINCT vitamin FROM foods")
-#     res = cur.fetchall()
-#     vitamins = []
-#     for row in res:
-#         vitamins.append(row[0])
-#     cur.close()
-#     leading_products = []
-#     for vit in vitamins:
-#         cur = conn.execute("SELECT product FROM foods WHERE vitamin=? LIMIT ?", [vit, limit])
-#         leaders = cur.fetchall()
-#         for row in leaders:
-#             product = row[0]
-#             if product in exclude_set:
-#                 continue
-#             leading_products.append(row[0])
-#     result = set(leading_products)
-#     return list(result)
 
 
 def check_completeness(product_set):
