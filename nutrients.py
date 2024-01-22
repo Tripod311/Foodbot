@@ -70,7 +70,53 @@ def check_completeness(product_set):
 
 
 def generate_list(exclude_set, products_per_nutrient=1):
-    pass
+    conn = sqlite3.connect("foods_new.sql")
+    # get nutrients list
+    cur = conn.execute("""SELECT name,alias FROM nutrients""")
+    raw = cur.fetchall()
+    nutrients = {}
+    for row in raw:
+        nutrients[row[0]] = {
+            "alias": row[1],
+            "warning": False,
+            "fatal": False,
+            "products": []
+        }
+    cur.close()
+    # get products list for each nutrient
+    for n in nutrients:
+        nutrient_obj = nutrients[n]
+        alias = nutrient_obj["alias"]
+        cur = conn.execute(f"""SELECT products.name FROM {alias}
+        LEFT JOIN products ON {alias}.product_id=products.rowid
+        ORDER BY {alias}.amount DESC""")
+        raw = cur.fetchall()
+        counter = 0
+        index = 0
+        while index < len(raw) and counter < products_per_nutrient:
+            product_name = raw[index][0]
+            index = index + 1
+            if product_name not in exclude_set:
+                counter = counter + 1
+                nutrient_obj["products"].append(product_name)
+        if counter == 0:
+            nutrient_obj["fatal"] = True
+        elif index > 6:
+            nutrient_obj["warning"] = True
+    result_list = []
+    warn_list = []
+    fatal_list = []
+    for n in nutrients:
+        result_list = result_list + nutrients[n]["products"]
+        if nutrients[n]["warning"]:
+            warn_list.append(n)
+        if nutrients[n]["fatal"]:
+            fatal_list.append(n)
+    result_list = set(result_list)
+    result_list = list(result_list)
+    result_list.sort()
+    conn.close()
+    return (result_list, warn_list, fatal_list)
 
 
 def get_nutrient_list():

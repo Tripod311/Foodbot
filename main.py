@@ -1,141 +1,347 @@
 from threading import Timer
-from telebot import TeleBot
-from telebot.util import quick_markup
-import foods
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from shared import Bot
+import scenario
+import nutrients
+import users
 
-EXCLUSIONS_TIMEOUT = 300
-Bot = TeleBot("6706767395:AAGmMyXCQm7humtVcYAMafK_8p2MjHVhDuk")
-Exclusions = {}
+users.setup()
 
-
-def create_exclusions(chat_id, product_limit):
-    clear_exclusions(chat_id)
-    t = Timer(EXCLUSIONS_TIMEOUT, clear_exclusions, [chat_id])
-    Exclusions[chat_id] = {
-        "product_limit": product_limit,
-        "arr": [],
-        "timer": t
-    }
-    t.start()
+SINGLE_PAGE_SIZE = 6
 
 
-def add_exclusion(chat_id, product):
-    Exclusions[chat_id]["timer"].cancel()
-    t = Timer(EXCLUSIONS_TIMEOUT, clear_exclusions, [chat_id])
-    Exclusions[chat_id]["arr"].append(product)
-    Exclusions[chat_id]["timer"] = t
-    t.start()
-
-
-def clear_exclusions(chat_id):
-    if chat_id in Exclusions:
-        Exclusions[chat_id]["timer"].cancel()
-        del Exclusions[chat_id]
-
-
-def process_exclusion(msg):
-    chat_id = msg.chat.id
-
-    if chat_id not in Exclusions:
-        return
-    if msg.text.strip() == "/cancel":
-        clear_exclusions(chat_id)
-        Bot.send_message(
-            chat_id=chat_id,
-            text="Больше не делаю список"
+def process_products_operation(state, cb):
+    data = cb.data
+    if data == "Вперед":
+        state["offset"] = state["offset"] + SINGLE_PAGE_SIZE
+        render_products_page(state)
+    elif data == "Назад":
+        state["offset"] = state["offset"] - SINGLE_PAGE_SIZE
+        render_products_page(state)
+    elif data == "Закончить":
+        scenario.reset_scenario(state["chat_id"])
+        users.set_exclusions(state["chat_id"], state["exclusions"])
+        Bot.edit_message_text(
+            text="Я все запомнил...",
+            chat_id=state["chat_id"],
+            message_id=state["message_id"]
         )
-        return
-
-    ex = msg.text.strip().lower()
-    add_exclusion(chat_id, ex)
-    arr = foods.only_first(Exclusions[chat_id]["arr"], Exclusions[chat_id]["product_limit"])
-    complete = foods.check_completeness(arr)
-    if len(complete) == 0:
-        Bot.send_message(
-            chat_id=chat_id,
-            text="Список:\n" + ",\n".join(arr) + "\nНапиши название продукта, чтобы исключить его из списка, бот заменит его, либо /cancel, чтобы закончить формирование\nЕсли в течение 5 минут не будет сообщений, список исключенных продуктов будет сброшен"
+        Bot.edit_message_reply_markup(
+            chat_id=state["chat_id"],
+            message_id=state["message_id"],
+            reply_markup=None
         )
     else:
-        Bot.send_message(
-            chat_id=chat_id,
-            text="Список:\n" + ",\n".join(arr) + "\nWARNING! В этом списке не хватает следующих элементов: " + ", ".join(complete) +
-                 "\nНапиши название продукта, чтобы исключить его из списка, бот заменит его, либо /cancel, чтобы закончить формирование\nЕсли в течение 5 минут не будет сообщений, список исключенных продуктов будет сброшен"
-        )
-    Bot.register_next_step_handler_by_chat_id(chat_id=chat_id, callback=process_exclusion)
+        if data in state["exclusions"]:
+            state["exclusions"].remove(data)
+        else:
+            state["exclusions"].append(data)
+        render_products_page(state)
 
 
-def handle_limit(msg):
-    chat_id = msg.chat.id
-
-    if msg.text.strip() == "/cancel":
-        clear_exclusions(chat_id)
-        Bot.send_message(
-            chat_id=chat_id,
-            text="Больше не делаю список"
-        )
-        return
-
-    product_limit = 1
-    try:
-        product_limit = int(msg.text.strip())
-        if product_limit < 0:
-            raise ValueError("Неотрицательные")
-
-        create_exclusions(chat_id, product_limit)
-        arr = foods.only_first(Exclusions[chat_id]["arr"], Exclusions[chat_id]["product_limit"])
-        Bot.send_message(
-            chat_id=chat_id,
-            text="Список:\n" + ",\n".join(arr) + "\nНапиши название продукта, чтобы исключить его из списка, бот заменит его, либо /cancel, чтобы закончить формирование\nЕсли в течение 5 минут не будет сообщений, список исключенных продуктов будет сброшен"
-        )
-        Bot.register_next_step_handler_by_chat_id(chat_id=chat_id, callback=process_exclusion)
-    except Exception as e:
-        Bot.send_message(
-            chat_id=chat_id,
-            text="Неверный ввод. Напиши /cancel, чтобы отменить"
-        )
-        Bot.register_next_step_handler_by_chat_id(chat_id=chat_id, callback=handle_limit)
-
-
-@Bot.callback_query_handler(func=lambda call: True)
-def handle_limit_human(msg):
-    chat_id = msg.message.chat.id
-
-    product_limit = 1
-    if msg.data == "Минимальный":
-        product_limit = 1
-    elif msg.data == "Расширенный":
-        product_limit = 3
-    create_exclusions(chat_id, product_limit)
-    arr = foods.only_first(Exclusions[chat_id]["arr"], Exclusions[chat_id]["product_limit"])
-    Bot.send_message(
-        chat_id=chat_id,
-        text="Список:\n" + ",\n".join(
-            arr) + "\nНапиши название продукта, чтобы исключить его из списка, бот заменит его, либо /cancel, чтобы закончить формирование\nЕсли в течение 5 минут не будет сообщений, список исключенных продуктов будет сброшен"
+def render_products_page(state, cb=None):
+    index = state["offset"]
+    markup = InlineKeyboardMarkup()
+    markup.row_width = 2
+    if index > 0:
+        markup.row(InlineKeyboardButton(text="Назад", callback_data="Назад"))
+    b1 = None
+    while index < len(state["products"]) and index < state["offset"] + SINGLE_PAGE_SIZE:
+        product_name = state["products"][index]
+        display = product_name
+        if product_name in state["exclusions"]:
+            display = display + "❌"
+        if b1 is None:
+            b1 = InlineKeyboardButton(text=display, callback_data=product_name)
+        else:
+            markup.add(b1, InlineKeyboardButton(text=display, callback_data=product_name))
+            b1 = None
+        index = index + 1
+    if b1 is not None:
+        markup.add(b1)
+    if index + SINGLE_PAGE_SIZE < len(state["products"]):
+        markup.row(InlineKeyboardButton(text="Вперед", callback_data="Вперед"))
+    markup.row(InlineKeyboardButton(text="Закончить", callback_data="Закончить"))
+    Bot.edit_message_reply_markup(
+        chat_id=state["chat_id"],
+        message_id=state["message_id"],
+        reply_markup=markup
     )
-    Bot.register_next_step_handler_by_chat_id(chat_id=chat_id, callback=process_exclusion)
+
+
+def process_operation(state, cb):
+    data = cb.data
+    if state["proc"] == "exc":
+        if data == "Вперед":
+            state["offset"] = state["offset"] + SINGLE_PAGE_SIZE
+            render_exclude_page(state)
+        elif data == "Назад":
+            state["offset"] = state["offset"] - SINGLE_PAGE_SIZE
+            render_exclude_page(state)
+        else:
+            state["exclusions"].append(data)
+            make_list(state)
+    elif state["proc"] == "ret":
+        if data == "Вперед":
+            state["offset"] = state["offset"] + 4
+            render_return_page(state)
+        elif data == "Назад":
+            state["offset"] = state["offset"] - 4
+            render_return_page(state)
+        else:
+            state["exclusions"].remove(data)
+            make_list(state)
+
+
+def render_exclude_page(state, cb=None):
+    index = state["offset"]
+    markup = InlineKeyboardMarkup()
+    markup.row_width = 2
+    if index > 0:
+        markup.row(InlineKeyboardButton(text="Назад", callback_data="Назад"))
+    b1 = None
+    while index < len(state["list"]) and index < state["offset"] + SINGLE_PAGE_SIZE:
+        product_name = state["list"][index]
+        if b1 is None:
+            b1 = InlineKeyboardButton(text=product_name, callback_data=product_name)
+        else:
+            markup.add(b1, InlineKeyboardButton(text=product_name, callback_data=product_name))
+            b1 = None
+        index = index + 1
+    if b1 is not None:
+        markup.add(b1)
+    if index + SINGLE_PAGE_SIZE < len(state["list"]):
+        markup.row(InlineKeyboardButton(text="Вперед", callback_data="Вперед"))
+    Bot.edit_message_reply_markup(
+        chat_id=state["chat_id"],
+        message_id=state["message_id"],
+        reply_markup=markup
+    )
+
+
+def render_return_page(state, cb=None):
+    index = state["offset"]
+    markup = InlineKeyboardMarkup()
+    markup.row_width = 2
+    if index > 0:
+        markup.row(InlineKeyboardButton(text="Назад", callback_data="Назад"))
+    b1 = None
+    while index < len(state["exclusions"]) and index < state["offset"] + SINGLE_PAGE_SIZE:
+        product_name = state["exclusions"][index]
+        if b1 is None:
+            b1 = InlineKeyboardButton(text=product_name, callback_data=product_name)
+        else:
+            markup.add(b1, InlineKeyboardButton(text=product_name, callback_data=product_name))
+            b1 = None
+        index = index + 1
+    if b1 is not None:
+        markup.add(b1)
+    if index + SINGLE_PAGE_SIZE < len(state["exclusions"]):
+        markup.row(InlineKeyboardButton(text="Вперед", callback_data="Вперед"))
+    Bot.edit_message_reply_markup(
+        chat_id=state["chat_id"],
+        message_id=state["message_id"],
+        reply_markup=markup
+    )
+
+
+def exclude_product(state, cb=None):
+    state["proc"] = "exc"
+    state["offset"] = 0
+    Bot.edit_message_text(
+        text="Выбери продукт, который надо исключить из списка",
+        chat_id=state["chat_id"],
+        message_id=state["message_id"]
+    )
+    render_exclude_page(state)
+
+
+def return_product(state, cb=None):
+    state["proc"] = "ret"
+    state["offset"] = 0
+    Bot.edit_message_text(
+        text="Выбери продукт, который надо вернуть в список",
+        chat_id=state["chat_id"],
+        message_id=state["message_id"]
+    )
+    render_return_page(state)
+
+
+def make_list(state, cb=None):
+    r_c = nutrients.generate_list(state["exclusions"], state["product_size"])
+    state["list"] = r_c[0]
+    text = "Список:\n" + ",\n".join(r_c[0])
+    if len(r_c[1]) > 0:
+        text = (text + "\n\nВ этом списке содержатся в сниженном количестве:\n" + ", ".join(r_c[1]) +
+                "\nЭто можно компенсировать количеством продуктов с этими нутриентами")
+    if len(r_c[2]) > 0:
+        text = (text + "\n\nВ этом списке отсутствуют:\n" + ", ".join(r_c[1]) +
+                "\nНеобходимо добавить продукты с этими нутриентами в рацион")
+    Bot.edit_message_text(
+        text=text,
+        chat_id=state["chat_id"],
+        message_id=state["message_id"]
+    )
+    markup = InlineKeyboardMarkup()
+    markup.row_width = 2
+    if len(state["list"]) > 0:
+        markup.add(InlineKeyboardButton(text="Убрать продукт", callback_data="Убрать продукт"))
+    if len(state["exclusions"]) > 0:
+        markup.add(InlineKeyboardButton(text="Вернуть продукт", callback_data="Вернуть продукт"))
+    markup.add(InlineKeyboardButton(text="Сохранить список", callback_data="Сохранить список"))
+    Bot.edit_message_reply_markup(
+        chat_id=state["chat_id"],
+        message_id=state["message_id"],
+        reply_markup=markup
+    )
+
+
+def generate_small_list(state, cb=None):
+    state["product_size"] = 1
+    make_list(state)
+
+
+def generate_extended_list(state, cb=None):
+    state["product_size"] = 3
+    make_list(state)
+
+
+def save_list(state, cb=None):
+    scenario.reset_scenario(state["chat_id"])
+    users.set_list(state["chat_id"], {"list": state["list"], "product_size": state["product_size"], "exclusions": state["exclusions"]})
+    Bot.edit_message_text(
+        text="Сохранил список:\n" + ",\n".join(state["list"]) + "\nМожно модифицировать его, отправить /modify",
+        chat_id=state["chat_id"],
+        message_id=state["message_id"]
+    )
+
+
+def notify_end(state):
+    Bot.edit_message_reply_markup(
+        chat_id=state["chat_id"],
+        message_id=state["message_id"],
+        reply_markup=None
+    )
+    Bot.send_message(chat_id=state["chat_id"], text="Больше не редактирую список")
 
 
 @Bot.message_handler(commands=["generate"])
 def generate_list(message):
     chat_id = message.chat.id
-    Bot.send_message(
+    scenario.reset_scenario(chat_id)
+    markup = InlineKeyboardMarkup()
+    markup.row_width = 1
+    markup.add(InlineKeyboardButton(text="Минимальный", callback_data="Минимальный"))
+    markup.add(InlineKeyboardButton(text="Расширенный", callback_data="Расширенный"))
+    msg = Bot.send_message(
         chat_id=chat_id,
         text="""Выбери тип списка:
 Минимальный - меньше продуктов, где каждый будет содержать наибольшее количество нутриентов
-Расширенный - больше продуктов, некоторые будут дублировать нутриенты
-Напиши /cancel, чтобы отменить генерацию""",
-        reply_markup=quick_markup({
-            "Минимальный": {"callback_data": "Минимальный"},
-            "Расширенный": {"callback_data": "Расширенный"}
-        })
+Расширенный - больше продуктов, некоторые будут дублировать нутриенты""",
+        reply_markup=markup
     )
-    # Bot.register_next_step_handler_by_chat_id(chat_id=chat_id, callback=handle_limit_human)
+    if msg is not None:
+        scenario.launch_scenario(
+            chat_id,
+            {
+                "end": notify_end,
+                "Минимальный": generate_small_list,
+                "Расширенный": generate_extended_list,
+                "Сохранить список": save_list,
+                "Убрать продукт": exclude_product,
+                "Вернуть продукт": return_product,
+                "default": process_operation
+            },
+            {
+                "chat_id": chat_id,
+                "message_id": msg.message_id,
+                "product_size": 1,
+                "exclusions": users.get_exclusions(chat_id),
+                "list": [],
+                "proc": None,
+                "offset": 0
+            }
+        )
+
+
+@Bot.message_handler(commands=["modify"])
+def modify(message):
+    chat_id = message.chat.id
+    scenario.reset_scenario(chat_id)
+    ll = users.get_list(chat_id)
+    if ll is None:
+        Bot.send_message(
+            chat_id=chat_id,
+            text="Нет сохраненного списка. Сначала создай его с помощью /generate"
+        )
+    else:
+        state = {
+            "chat_id": chat_id,
+            "product_size": ll["product_size"],
+            "exclusions": ll["exclusions"],
+            "list": ll["list"],
+            "proc": None,
+            "offset": 0
+        }
+        markup = InlineKeyboardMarkup()
+        markup.row_width = 2
+        if len(state["list"]) > 0:
+            markup.add(InlineKeyboardButton(text="Убрать продукт", callback_data="Убрать продукт"))
+        if len(state["exclusions"]) > 0:
+            markup.add(InlineKeyboardButton(text="Вернуть продукт", callback_data="Вернуть продукт"))
+        markup.add(InlineKeyboardButton(text="Сохранить список", callback_data="Сохранить список"))
+        msg = Bot.send_message(
+            chat_id=chat_id,
+            text="Список:\n" + ",\n".join(ll["list"]),
+            reply_markup=markup
+        )
+        if msg is not None:
+            state["message_id"] = msg.message_id,
+            scenario.launch_scenario(
+                chat_id,
+                {
+                    "end": notify_end,
+                    "Сохранить список": save_list,
+                    "Убрать продукт": exclude_product,
+                    "Вернуть продукт": return_product,
+                    "default": process_operation
+                },
+                state
+            )
+
+
+@Bot.message_handler(commands=["my_products"])
+def my_products(message):
+    chat_id = message.chat.id
+    scenario.reset_scenario(chat_id)
+    products = nutrients.get_product_list()
+    exclusions = users.get_exclusions(chat_id)
+    msg = Bot.send_message(
+        chat_id=chat_id,
+        text="Ща все будет"
+    )
+    if msg is not None:
+        state = {
+            "chat_id": chat_id,
+            "message_id": msg.message_id,
+            "products": products,
+            "exclusions": exclusions,
+            "offset": 0
+        }
+        scenario.launch_scenario(
+            chat_id,
+            {
+                "default": process_products_operation
+            },
+            state
+        )
+        render_products_page(state)
 
 
 @Bot.message_handler(commands=["minimal"])
 def generate_minimal(message):
-    clear_exclusions(message.chat.id)
-    arr = foods.find_minimal()
+    scenario.reset_scenario(message.chat.id)
+    arr = nutrients.find_minimal()
     Bot.send_message(
         chat_id=message.chat.id,
         text="Минимальный список продуктов, содержащий все нутриенты (не обязательно в нужном количестве):\n" + ",\n".join(arr)
@@ -144,8 +350,8 @@ def generate_minimal(message):
 
 @Bot.message_handler(commands=["nutrient_list"])
 def nutrient_list(message):
-    clear_exclusions(message.chat.id)
-    arr = foods.get_nutrient_list()
+    scenario.reset_scenario(message.chat.id)
+    arr = nutrients.get_nutrient_list()
     Bot.send_message(
         chat_id=message.chat.id,
         text="Список нутриентов:\n" + ",\n".join(arr)
@@ -154,8 +360,8 @@ def nutrient_list(message):
 
 @Bot.message_handler(commands=["product_list"])
 def product_list(message):
-    clear_exclusions(message.chat.id)
-    arr = foods.get_product_list()
+    scenario.reset_scenario(message.chat.id)
+    arr = nutrients.get_product_list()
     Bot.send_message(
         chat_id=message.chat.id,
         text="Список продуктов:\n" + ",\n".join(arr)
@@ -164,11 +370,11 @@ def product_list(message):
 
 @Bot.message_handler(commands=["get_nutrient"])
 def get_nutrient(message):
-    clear_exclusions(message.chat.id)
+    scenario.reset_scenario(message.chat.id)
 
     def process_nutrient(msg):
         nutrient_name = msg.text.strip().lower()
-        arr = foods.get_product_for_nutrient(nutrient_name)
+        arr = nutrients.get_products_for_nutrient(nutrient_name)
         if len(arr) == 0:
             Bot.send_message(
                 chat_id=message.chat.id,
@@ -189,11 +395,11 @@ def get_nutrient(message):
 
 @Bot.message_handler(commands=["get_product"])
 def get_product(message):
-    clear_exclusions(message.chat.id)
+    scenario.reset_scenario(message.chat.id)
 
     def process_product(msg):
         product_name = msg.text.strip().lower()
-        arr = foods.get_nutrient_in_product(product_name)
+        arr = nutrients.get_nutrients_in_product(product_name)
         if len(arr) == 0:
             Bot.send_message(
                 chat_id=message.chat.id,
@@ -207,13 +413,14 @@ def get_product(message):
 
     Bot.send_message(
         chat_id=message.chat.id,
-        text="Напиши название нутриента"
+        text="Напиши название продукта"
     )
     Bot.register_next_step_handler_by_chat_id(chat_id=message.chat.id, callback=process_product)
 
 
 @Bot.message_handler(commands=["help"])
 def get_help(message):
+    scenario.reset_scenario(message.chat.id)
     Bot.send_message(
         chat_id=message.chat.id,
         text="""/nutrient_list - чтобы посмотреть список всех нутриентов
