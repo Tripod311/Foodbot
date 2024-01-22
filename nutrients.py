@@ -145,7 +145,7 @@ def get_product_list():
 
 def get_products_for_nutrient(n_name):
     conn = sqlite3.connect("foods_new.sql")
-    cur = conn.execute("SELECT alias FROM nutrients WHERE name=?", [n_name])
+    cur = conn.execute("SELECT alias, daily FROM nutrients WHERE name=?", [n_name])
     raw = cur.fetchone()
     if raw is None:
         cur.close()
@@ -153,14 +153,15 @@ def get_products_for_nutrient(n_name):
         return None
     else:
         alias = raw[0]
+        daily = raw[1]
         cur.close()
-        cur = conn.execute(f"""SELECT products.name FROM {alias}
+        cur = conn.execute(f"""SELECT products.name, {alias}.amount FROM {alias}
         LEFT JOIN products ON {alias}.product_id = products.rowid
         ORDER BY {alias}.amount DESC""")
         raw = cur.fetchall()
         arr = []
         for row in raw:
-            arr.append(row[0])
+            arr.append(row[0] + " - {:.2f}%".format(row[1]/daily * 100))
         cur.close()
         conn.close()
         return arr
@@ -187,3 +188,29 @@ def get_nutrients_in_product(p_name):
         cur.close()
         conn.close()
         return arr
+
+
+def get_product_ratings(product_set):
+    result = []
+    conn = sqlite3.connect("foods_new.sql")
+    for product in product_set:
+        rating = 0
+        cur = conn.execute("""SELECT products.rowid, nutrients.alias, nutrients.daily FROM relations
+        LEFT JOIN products ON relations.product_id=products.rowid
+        LEFT JOIN nutrients ON relations.nutrient_id=nutrients.rowid
+        WHERE products.name=?""", [product])
+        for row in cur.fetchall():
+            product_id = row[0]
+            alias = row[1]
+            daily = row[2]
+            p_c = conn.execute(f"SELECT amount FROM {alias} WHERE product_id=?", [product_id])
+            product_amount = p_c.fetchone()[0]
+            rating = rating + min(1, product_amount/daily)
+            p_c.close()
+        cur.close()
+        index = 0
+        while index < len(result) and result[index][1] > rating:
+            index = index + 1
+        result.insert(index, (product, rating))
+    conn.close()
+    return result
