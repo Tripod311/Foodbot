@@ -214,3 +214,25 @@ def get_product_ratings(product_set):
         result.insert(index, (product, rating))
     conn.close()
     return result
+
+
+def get_csv():
+    nutrient_list = get_nutrient_list()
+    n_products = []
+    max_product_length = 0
+    for n in nutrient_list:
+        n_p = get_products_for_nutrient(n)
+        max_product_length = max(max_product_length, len(n_p))
+        n_products.append(n_p)
+    csv = [
+        ";".join(nutrient_list)
+    ]
+    for i in range(0, max_product_length):
+        line = []
+        for prod_list in n_products:
+            if i < len(prod_list):
+                line.append(prod_list[i])
+            else:
+                line.append("")
+        csv.append(";".join(line))
+    return "\n".join(csv)

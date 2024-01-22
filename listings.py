@@ -1,3 +1,4 @@
+from telebot.types import InputFile
 from shared import Bot, create_page_markup, SINGLE_PAGE_SIZE
 import scenario
 import nutrients
@@ -212,3 +213,11 @@ def get_product_ratings(message):
                 "offset": 0
             }
         )
+
+
+@Bot.message_handler(commands=["get_csv"])
+def get_csv(message):
+    Bot.send_document(
+        chat_id=message.chat.id,
+        document=InputFile("foodTable.csv")
+    )
