@@ -136,7 +136,7 @@ def process_rating_selection(state, cb):
                 state["list"],
                 state["offset"],
                 [{"text": "Рассчитать", "callback_data": "Рассчитать"}],
-                lambda product: product if product not in state["selection"] else product + "✅"
+                lambda product: product if product not in state["selection"] else "✅" + product
             )
         )
     elif data == "Назад":
@@ -148,7 +148,7 @@ def process_rating_selection(state, cb):
                 state["list"],
                 state["offset"],
                 [{"text": "Рассчитать", "callback_data": "Рассчитать"}],
-                lambda product: product if product not in state["selection"] else product + "✅"
+                lambda product: product if product not in state["selection"] else "✅" + product
             )
         )
     elif data == "Рассчитать":

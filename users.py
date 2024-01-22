@@ -102,7 +102,7 @@ def render_products_page(state, cb=None):
         items,
         offset,
         [{"text": "Закончить", "callback_data": "Закончить"}],
-        lambda product: product if product not in exclusions else product + "❌"
+        lambda product: product if product not in exclusions else "❌" + product
     )
     Bot.edit_message_reply_markup(
         chat_id=state["chat_id"],
