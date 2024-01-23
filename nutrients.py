@@ -178,13 +178,19 @@ def get_nutrients_in_product(p_name):
     else:
         product_id = raw[0]
         cur.close()
-        cur = conn.execute(f"""SELECT nutrients.name FROM relations
+        cur = conn.execute(f"""SELECT nutrients.name, nutrients.daily, nutrients.alias FROM relations
         LEFT JOIN nutrients ON relations.nutrient_id = nutrients.rowid
         WHERE relations.product_id=?""", [product_id])
         raw = cur.fetchall()
         arr = []
         for row in raw:
-            arr.append(row[0])
+            # arr.append(row[0])
+            name = row[0]
+            daily = row[1]
+            alias = row[2]
+            n_c = conn.execute(f"SELECT amount FROM {alias} WHERE product_id=?", [product_id])
+            arr.append(name + " - {:.2f}% от суточной нормы".format(n_c.fetchone()[0]/daily*100))
+            n_c.close()
         cur.close()
         conn.close()
         return arr
